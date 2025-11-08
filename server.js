@@ -12,13 +12,16 @@ connectDB();
 // POST /api/sightings  -> create
 app.post("/api/sightings", async (req, res) => {
   try {
-    const { when, loc, accuracyM, description } = req.body;
-    if (!loc?.type || !Array.isArray(loc.coordinates)) {
-      return res.status(400).json({ error: "Invalid loc" });
+    const { lat, lng, timestamp, accuracyM, description } = req.body;
+    if (!lat || !lng) {
+      return res.status(400).json({ error: "Invalid location" });
     }
     const doc = await Position.create({
-      when: when ? new Date(when) : new Date(),
-      loc,
+      when: timestamp ? new Date(timestamp) : new Date(),
+      loc: {
+        type: "Point",
+        coordinates: [lng, lat],
+      },
       accuracyM: typeof accuracyM === "number" ? accuracyM : 20,
       description: (description || "").slice(0, 500),
       status: "approved",

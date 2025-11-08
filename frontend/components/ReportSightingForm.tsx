@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { time } from "console";
 
 const formSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -33,7 +34,8 @@ export default function ReportSightingForm({
     handleSubmit, 
     reset, 
     setValue, 
-    formState: { errors } 
+    formState: { errors },
+    getValues,            // NEW: to read current form values for compare
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -57,13 +59,12 @@ export default function ReportSightingForm({
       const body = {
         lat: data.lat,
         lng: data.lng,
+        timestamp: new Date().toISOString(),
         accuracyM: data.accuracyM ?? 20,
         description: data.description?.trim() || "",
       };
 
-      const url = process.env.NEXT_PUBLIC_API_BASE
-        ? `${process.env.NEXT_PUBLIC_API_BASE}/api/sightings`
-        : "/api/sightings";
+      const url = "http://localhost:3000/api/sightings";
 
       const response = await fetch(url, {
         method: "POST",
@@ -99,84 +100,119 @@ export default function ReportSightingForm({
     }
   };
 
-  return (
-    <Card className="p-4 space-y-3">
-      <h2 className="text-lg font-semibold">Report a Superman Sighting</h2>
-      <form className="grid gap-3" onSubmit={handleSubmit(onSubmit)}>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label htmlFor="lat">Latitude</Label>
-            <Input 
-              id="lat" 
-              type="number" 
-              step="any" 
-              placeholder="45.5579"
-              {...register("lat", { valueAsNumber: true })} 
-            />
-            {errors.lat && (
-              <p className="text-sm text-red-500 mt-1">{errors.lat.message}</p>
-            )}
-          </div>
-          <div>
-            <Label htmlFor="lng">Longitude</Label>
-            <Input 
-              id="lng" 
-              type="number" 
-              step="any" 
-              placeholder="-94.1632"
-              {...register("lng", { valueAsNumber: true })} 
-            />
-            {errors.lng && (
-              <p className="text-sm text-red-500 mt-1">{errors.lng.message}</p>
-            )}
-          </div>
-        </div>
+  // NEW: Haversine distance in meters
+  function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371000; // meters
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
 
+ async function safeJson(res: Response) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Unexpected response from /api/sightings/latest: ${text.slice(0, 200)}...`);
+  }
+}
+
+const onCompareLatest = async () => {
+  try {
+    // Prefer current form values; fall back to latLng prop
+    const vals = getValues();
+    const latFromForm = vals?.lat;
+    const lngFromForm = vals?.lng;
+
+    const myLat = Number.isFinite(latFromForm) ? latFromForm : latLng?.lat;
+    const myLng = Number.isFinite(lngFromForm) ? lngFromForm : latLng?.lng;
+
+    if (typeof myLat !== "number" || typeof myLng !== "number") {
+      alert("📍 Please click on the map (or enter lat/lng) first.");
+      return;
+    }
+
+    // Fetch latest sighting (relative URL to avoid SSL mismatch)
+    const res = await fetch("http://localhost:3000/api/sightings/latest", { cache: "no-store" });
+
+    if (!res.ok) {
+      const note = await res.text().catch(() => "");
+      throw new Error(`Latest endpoint error ${res.status}. ${note || "No details."}`);
+    }
+
+    const latest = await safeJson(res);
+
+    // Support a few common shapes: doc, {latest: doc}, {data: doc}
+    const doc = latest?.loc?.coordinates
+      ? latest
+      : latest?.latest?.loc?.coordinates
+      ? latest.latest
+      : latest?.data?.loc?.coordinates
+      ? latest.data
+      : null;
+
+    if (!doc) {
+      console.error("Latest payload:", latest);
+      throw new Error("Could not find latest.loc.coordinates in response JSON.");
+    }
+
+    // Mongo GeoJSON is [lng, lat]
+    const coords = doc.loc?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) {
+      console.error("Bad coordinates field:", coords);
+      throw new Error("Latest sighting has invalid coordinates.");
+    }
+
+    const [lng2, lat2] = coords as [number, number];
+
+    if (!Number.isFinite(lat2) || !Number.isFinite(lng2)) {
+      throw new Error("Latest sighting coordinates are not numbers.");
+    }
+
+    const distance = haversineMeters(myLat, myLng, lat2, lng2);
+    const accuracy = Number.isFinite(doc.accuracyM) ? doc.accuracyM : 20;
+    const desc = (doc.description || "Latest sighting").toString();
+
+    alert(`📏 ${desc}:\nYou are ${distance.toFixed(0)} m away (±${accuracy} m).`);
+  } catch (e: any) {
+    console.error("Compare failed:", e);
+    alert(`⚠️ Comparison failed: ${e?.message || "Unknown error"}`);
+  }
+};
+
+  return (
+    <Card className="p-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <div>
+          <Label htmlFor="lat">Latitude</Label>
+          <Input id="lat" type="number" step="any" {...register("lat", { valueAsNumber: true })} />
+          {errors.lat && <p className="text-red-500 text-sm">{errors.lat.message}</p>}
+        </div>
+        <div>
+          <Label htmlFor="lng">Longitude</Label>
+          <Input id="lng" type="number" step="any" {...register("lng", { valueAsNumber: true })} />
+          {errors.lng && <p className="text-red-500 text-sm">{errors.lng.message}</p>}
+        </div>
         <div>
           <Label htmlFor="accuracyM">Accuracy (meters)</Label>
-          <Input 
-            id="accuracyM" 
-            type="number" 
-            step="1" 
-            placeholder="20" 
-            defaultValue={20}
-            {...register("accuracyM", { valueAsNumber: true })} 
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            How precise is this location?
-          </p>
-          {errors.accuracyM && (
-            <p className="text-sm text-red-500 mt-1">{errors.accuracyM.message}</p>
-          )}
+          <Input id="accuracyM" type="number" {...register("accuracyM", { valueAsNumber: true })} />
         </div>
-
         <div>
-          <Label htmlFor="description">Description (optional)</Label>
-          <Textarea 
-            id="description" 
-            placeholder="Saw Superman flying over downtown, wearing his red cape..."
-            rows={3}
-            maxLength={500}
-            {...register("description")} 
-          />
-          {errors.description && (
-            <p className="text-sm text-red-500 mt-1">{errors.description.message}</p>
-          )}
+          <Label htmlFor="description">Description</Label>
+          <Textarea id="description" {...register("description")} />
         </div>
-
-        <Button 
-          type="submit" 
-          disabled={isSubmitting || !latLng}
-          className="w-full"
-        >
-          {isSubmitting ? "Submitting..." : "Submit Sighting"}
-        </Button>
-        
-        {!latLng && (
-          <p className="text-sm text-amber-600 text-center bg-amber-50 p-2 rounded">
-            👆 Click on the map to select a location first
-          </p>
-        )}
+        <div className="flex gap-2">
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "Submitting..." : "Report Sighting"}
+          </Button>
+          <Button type="button" onClick={onCompareLatest} variant="outline">
+            Compare to Latest
+          </Button>
+        </div>
       </form>
     </Card>
   );

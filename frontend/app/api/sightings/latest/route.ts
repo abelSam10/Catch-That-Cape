@@ -5,7 +5,7 @@ import Sighting from "@/models/Sighting";
 export async function GET() {
   try {
     // Connect to MongoDB
-    await connectDB();
+    await connectDB;
 
     // Get the most recent sighting
     const latest = await Sighting.findOne()

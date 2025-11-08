@@ -72,8 +72,8 @@ export default function Home() {
 
   async function loadLatest() {
     try {
-      const base = process.env.NEXT_PUBLIC_API_BASE ?? "";
-      const r = await fetch(`${base}/api/sightings/latest`);
+      // const base = process.env.NEXT_PUBLIC_API_BASE ?? "";
+      const r = await fetch(`http://localhost:3000/api/sightings/latest`);
       if (!r.ok) return;
       const d = await r.json();
       if (!d) return;
