@@ -16,7 +16,7 @@ const PositionSchema = new mongoose.Schema({
         required: true
     },
     note: {
-        type String,
+        type: String,
         required: false
     }
 });
